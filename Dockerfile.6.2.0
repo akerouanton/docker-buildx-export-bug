@@ -1,0 +1,69 @@
+FROM ubuntu:23.04 as sources-ubuntu6.2.0
+
+RUN export DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC && \
+    apt-get update && \
+    apt-get install -y autoconf bc debhelper bison dwarves flex initramfs-tools libelf-dev libssl-dev llvm lz4 openssl zstd && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN mkdir /build && \
+    cd /build && \
+    sed -i 's/# deb-src/deb-src/' /etc/apt/sources.list && \
+    apt-get update && \
+    apt-get source linux-source-6.2.0=6.2.0-20.20 && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build/linux-6.2.0
+
+####################
+
+FROM sources-ubuntu6.2.0 as build-ubuntu6.2.0
+
+COPY config .config
+
+# Make unsigned modules loadable
+RUN sed -i \
+      -e 's/CONFIG_MODULE_SIG=y/CONFIG_MODULE_SIG=n/' \
+      -e 's/CONFIG_SECURITY_LOCKDOWN_LSM=y/CONFIG_SECURITY_LOCKDOWN_LSM=n/' \
+    .config && \
+# Disable kernel signature
+    sed -i \
+      -e 's/CONFIG_SYSTEM_TRUSTED_KEYRING=y/CONFIG_SYSTEM_TRUSTED_KEYRING=n/' \
+      -e 's/CONFIG_SYSTEM_TRUSTED_KEYS=.*/CONFIG_SYSTEM_TRUSTED_KEYS=""/' \
+      -e 's/CONFIG_SYSTEM_REVOCATION_KEYS=.*/CONFIG_SYSTEM_REVOCATION_KEYS=""/' \
+    .config && \
+# Overwrite version signature to make sure 'make modules_install' will copy modules to the right folder
+    sed -i \
+      -e "s/CONFIG_VERSION_SIGNATURE=.*/CONFIG_VERSION_SIGNATURE=\"Ubuntu 6.2.0\"/" \
+    .config && \
+# Build for debug
+    sed -i \
+      -e 's/CONFIG_GDB_SCRIPTS=.*/CONFIG_GDB_SCRIPTS=y/' \
+      -e 's/CONFIG_DEBUG_INFO_REDUCED=.*/CONFIG_DEBUG_INFO_REDUCED=n/' \
+    .config && \
+# Don't compile kernel tests
+    echo 'CONFIG_COMPILE_TEST=n' >> .config && \
+# Make all modules part of vmlinux
+    sed -i 's/=m$/=y/' .config && \
+# Enable IPVS debug mode
+    echo 'CONFIG_IP_VS_DEBUG=y' >> .config && \
+# Enable neighbour table debug mode
+    sed -i 's/#define NEIGH_DEBUG [[:digit:]]/#define NEIGH_DEBUG 2/' net/core/neighbour.c
+
+RUN make -j $(getconf _NPROCESSORS_ONLN)
+RUN make modules_install install
+
+####################
+
+FROM scratch as vmlinux-ubuntu6.2.0
+
+# COPY --from=sources-ubuntu6.2.0 \
+#     /build/linux-6.2.0/ \
+#     /src/
+
+COPY --from=build-ubuntu6.2.0 \
+    /boot/initrd.img-* \
+    /build/initrd.img
+
+COPY --from=build-ubuntu6.2.0 \
+    /build/linux-6.2.0/vmlinux \
+    /build/
