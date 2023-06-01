@@ -56,9 +56,9 @@ RUN make modules_install install
 
 FROM scratch as vmlinux-ubuntu6.2.0
 
-# COPY --from=sources-ubuntu6.2.0 \
-#     /build/linux-6.2.0/ \
-#     /src/
+COPY --from=sources-ubuntu6.2.0 \
+    /build/linux-6.2.0/ \
+    /src/
 
 COPY --from=build-ubuntu6.2.0 \
     /boot/initrd.img-* \
